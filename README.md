@@ -9,7 +9,8 @@
 
 <br>
 <h1 align="center">Projeto Redes – Cliente/Servidor (2025.1)</h1>
-
+<h1 class="img-row">
+    <img title="readme" src="C:\TrabalhoRedes\Trabalho_Rede\img_infra.png" width="270" height="290" style="display: inline-block;">
 <p align="center">
   <a href="#entrega1">Entrega 1</a> &nbsp;|&nbsp;
   <a href="#entrega2">Entrega 2</a> &nbsp;|&nbsp;
@@ -22,16 +23,6 @@
 
 <h2>💻 Projeto</h2>
 <p>Este projeto tem como objetivo criar uma aplicação cliente-servidor simulando um protocolo confiável de transporte na camada de aplicação, conforme os conteúdos abordados na disciplina de Infraestrutura de Redes.</p>
-
-<br>
-
-<h2 id="entrega1">📦 Entrega 1 – Comunicação inicial</h2>
-<ul>
-  <li>Servidor criado com socket, aguardando conexão.</li>
-  <li>Cliente se conecta ao servidor via localhost e porta fixa.</li>
-  <li>Mensagem inicial enviada com modo de operação (ex: "lote") e tamanho máximo da carga útil (ex: "3").</li>
-  <li>Servidor imprime a mensagem e responde com uma confirmação.</li>
-</ul>
 
 <br>
 
@@ -51,6 +42,24 @@
 
 <br>
 
+<h2 id="entrega1">📦 Entrega 1 – Comunicação inicial</h2>
+<ul>
+  <li>Servidor criado com socket, aguardando conexão.</li>
+  <li>Cliente se conecta ao servidor via localhost e porta fixa.</li>
+  <li>Mensagem inicial enviada com modo de operação (ex: "lote") e tamanho máximo da carga útil (ex: "3").</li>
+  <li>Servidor imprime a mensagem e responde com uma confirmação.</li>
+</ul>
+<h2 id="entrega2">📦 Entrega 2 – Mensagens sem falhas</h2>
+<p><i>(a ser desenvolvida)</i></p>
+
+<h2 id="entrega3">📦 Entrega 3 – Simulação de perdas e erros</h2>
+<p><i>(a ser desenvolvida)</i></p>
+
+<h2 id="entrega4">📦 Entrega 4 – Projeto final</h2>
+<p><i>(a ser desenvolvida)</i></p>
+
+<br>
+
 <h2 id="colaboradores">👥 Colaboradores</h2>
 <ul>
   <li>Victor Paes</li>
@@ -63,15 +72,6 @@
 </ul>
 
 <br>
-
-<h2 id="entrega2">📦 Entrega 2 – Mensagens sem falhas</h2>
-<p><i>(a ser desenvolvida)</i></p>
-
-<h2 id="entrega3">📦 Entrega 3 – Simulação de perdas e erros</h2>
-<p><i>(a ser desenvolvida)</i></p>
-
-<h2 id="entrega4">📦 Entrega 4 – Projeto final</h2>
-<p><i>(a ser desenvolvida)</i></p>
 
 </body>
 </html>
