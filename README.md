@@ -10,7 +10,7 @@
 <br>
 <h1 align="center">Projeto Redes – Cliente/Servidor (2025.1)</h1>
 <h1 class="img-row">
-    <img title="readme" src="img_infra.png" width="270" height="290" style="display: inline-block;">
+    <img title="readme" src="img_infra.png" width="400" height="200" style="display: inline-block;">
 </h1>
 <p align="center">
   <a href="#entrega1">Entrega 1</a> &nbsp;|&nbsp;
