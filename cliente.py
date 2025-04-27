@@ -37,6 +37,38 @@ base = 0
 next_seq = 0
 lock = threading.Lock()
 
+gbn_timer = None
+
+sr_timers = {}
+
+def iniciar_gbn_timer():
+    global gbn_timer
+    if gbn_timer is not None:
+        gbn_timer.cancel()
+    gbn_timer = threading.Timer(timeout, gbn_timeout_handler)
+    gbn_timer.start()
+
+def gbn_timeout_handler():
+    global base, next_seq
+    with lock:
+        print("[TIMEOUT GBN] Reenviando todos os pacotes da janela a partir do base")
+        for i in range(base, next_seq):
+            print(f"[REENVIANDO]: {pacotes[i]}")
+            cliente.send(pacotes[i].encode())
+        iniciar_gbn_timer()
+
+def iniciar_sr_timer(seq):
+    t = threading.Timer(timeout, sr_timeout_handler, args=(seq,))
+    sr_timers[seq] = t
+    t.start()
+
+def sr_timeout_handler(seq):
+    with lock:
+        if seq not in acks_recebidos:
+            print(f"[TIMEOUT SR] Reenviando pacote {seq}")
+            cliente.send(pacotes[seq].encode())
+            iniciar_sr_timer(seq)  
+
 def receber_ack():
     global base
     while True:
@@ -48,10 +80,18 @@ def receber_ack():
                 with lock:
                     acks_recebidos.add(seq_ack)
                     if modo_operacao == "GBN":
-                        if seq_ack == base:
-                            base += 1
-                    else:
+                        if seq_ack >= base:
+                            base = seq_ack + 1
+                            if base == next_seq:
+                                if gbn_timer is not None:
+                                    gbn_timer.cancel()
+                            else:
+                                iniciar_gbn_timer()
+                    else:  # SR
                         while base in acks_recebidos:
+                            if base in sr_timers:
+                                sr_timers[base].cancel()
+                                del sr_timers[base]
                             base += 1
         except:
             break
@@ -63,22 +103,19 @@ while base < len(pacotes):
         while next_seq < base + janela_tamanho and next_seq < len(pacotes):
             print(f"[PACOTE ENVIADO]: {pacotes[next_seq]}")
             cliente.send(pacotes[next_seq].encode())
+            if modo_operacao == "GBN":
+                if base == next_seq:  
+                    iniciar_gbn_timer()
+            else:  
+                iniciar_sr_timer(next_seq)
             next_seq += 1
+    time.sleep(0.1)  
 
-    time.sleep(timeout)
-
-    with lock:
-        if modo_operacao == "GBN":
-            if base < next_seq:
-                print("[TIMEOUT] Reenviando pacotes Go-Back-N a partir do base")
-                for i in range(base, next_seq):
-                    print(f"[REENVIANDO]: {pacotes[i]}")
-                    cliente.send(pacotes[i].encode())
-        else:
-            for i in range(base, next_seq):
-                if i not in acks_recebidos:
-                    print(f"[REENVIANDO]: {pacotes[i]}")
-                    cliente.send(pacotes[i].encode())
+if modo_operacao == "GBN" and gbn_timer is not None:
+    gbn_timer.cancel()
+if modo_operacao == "SR":
+    for t in sr_timers.values():
+        t.cancel()
 
 cliente.send("FIM".encode())
 print("[SINAL DE FIM ENVIADO]")
