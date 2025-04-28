@@ -2,69 +2,75 @@ import socket
 import threading
 
 def calcular_checksum(dados):
-    return str(sum(bytearray(dados.encode())) % 256)
+    return str(sum(ord(c) for c in dados) % 256)
 
-servidor = socket.socket()
-servidor.bind(("localhost", 12345))
+HOST = "localhost"
+PORT = 12345
+
+servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+servidor.bind((HOST, PORT))
 servidor.listen(1)
 
-print("Servidor esperando conexão...\n")
+print("Servidor aguardando conexão...")
 
-conexao, endereco = servidor.accept()
-print("Cliente conectado:", endereco)
+conn, addr = servidor.accept()
+print(f"Conectado a {addr}")
 
-handshake = conexao.recv(1024).decode()
-print("[HANDSHAKE RECEBIDO]:", handshake)
+handshake = conn.recv(1024).decode()
+print(f"[HANDSHAKE RECEBIDO]: {handshake}")
 
-modo_operacao = conexao.recv(1024).decode()
-print(f"[MODO OPERACAO RECEBIDO]: {modo_operacao}")
+modo = conn.recv(1024).decode()
+print(f"[MODO RECEBIDO]: {modo}")
 
-mensagem_completa = {}
 esperado = 0
+pacotes_recebidos = {}
 
-def processar_pacote(pacote):
+def tratar_pacote(pacote):
     global esperado
-    try:
-        if not pacote or "|" not in pacote:
-            return  
-        seq, dados, checksum = pacote.split("|")
-        seq = int(seq)
-        checksum_calculado = calcular_checksum(dados)
+    if not pacote or "|" not in pacote:
+        return
 
-        print(f"[PACOTE RECEBIDO]: Seq={seq} Dados={dados} Checksum={checksum_calculado}")
+    partes = pacote.strip().split("|")
+    if len(partes) != 3:
+        print("[ERRO] Pacote mal formado")
+        return
 
-        if checksum_calculado == checksum:
-            if modo_operacao == "GBN":
-                if seq == esperado:
-                    mensagem_completa[seq] = dados
-                    esperado += 1
-                ack = f"ACK {esperado-1}"
-                conexao.send(ack.encode())
-                print(f"[ACK ENVIADO]: {ack}")
-            else:  
-                mensagem_completa[seq] = dados
-                ack = f"ACK {seq}"
-                conexao.send(ack.encode())
-                print(f"[ACK ENVIADO]: {ack}")
+    seq, dados, checksum = partes
+    seq = int(seq)
+    checksum = int(checksum)
+
+    checksum_calc = sum(ord(c) for c in dados) % 256
+
+    print(f"[PACOTE RECEBIDO]: Seq={seq} Dados={dados} Checksum={checksum_calc}")
+
+    if checksum != checksum_calc:
+        print(f"[ERRO] Checksum incorreto para pacote {seq}")
+        return
+
+    if modo == "gbn":
+        if seq == esperado:
+            pacotes_recebidos[seq] = dados
+            esperado += 1
+            ack = f"ACK {seq}"
         else:
-            nack = f"NACK {seq}"
-            conexao.send(nack.encode())
-            print(f"[NACK ENVIADO]: {nack}")
-    except:
-        print("[ERRO] Pacote mal formatado")
+            ack = f"ACK {esperado-1}"
+        conn.send(ack.encode())
+        print(f"[ACK ENVIADO]: {ack}")
+    else:  
+        pacotes_recebidos[seq] = dados
+        ack = f"ACK {seq}"
+        conn.send(ack.encode())
+        print(f"[ACK ENVIADO]: {ack}")
 
 while True:
-    pacote = conexao.recv(1024).decode()
+    pacote = conn.recv(1024).decode()
     if pacote == "FIM":
-        print("[FIM da transmissão recebido]")
+        print("[FIM recebido]")
         break
-    threading.Thread(target=processar_pacote, args=(pacote,)).start()
+    threading.Thread(target=tratar_pacote, args=(pacote,)).start()
 
-mensagem_final = ""
-for seq in sorted(mensagem_completa):
-    mensagem_final += mensagem_completa[seq]
+mensagem = "".join(pacotes_recebidos[i] for i in sorted(pacotes_recebidos))
+print(f"[MENSAGEM FINAL]: {mensagem}")
 
-print("\n[MENSAGEM FINAL RECEBIDA COMPLETA]:", mensagem_final)
-
-conexao.close()
+conn.close()
 servidor.close()

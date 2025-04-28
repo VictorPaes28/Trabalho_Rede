@@ -1,98 +1,80 @@
 import socket
 import threading
 import time
+import random
 
 def calcular_checksum(dados):
-    return str(sum(bytearray(dados.encode())) % 256)
+    return str(sum(ord(c) for c in dados) % 256)
 
-cliente = socket.socket()
-cliente.connect(("localhost", 12345))
+HOST = "localhost"
+PORT = 12345
+
+cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+cliente.connect((HOST, PORT))
 
 modo = "lote"
-tamanho = "3"
-handshake = f"modo:{modo},tamanho:{tamanho}"
+tamanho = 3
+handshake = f"modo:{modo};tamanho:{tamanho}"
 cliente.send(handshake.encode())
 print(f"[HANDSHAKE ENVIADO]: {handshake}")
 
-modo_operacao = input("Escolha o modo (GBN para Go-Back-N, SR para Selective Repeat): ").strip()
+modo_operacao = input("Escolha o modo (gbn ou sr): ").strip()
 cliente.send(modo_operacao.encode())
 print(f"[MODO OPERACAO ENVIADO]: {modo_operacao}")
 
-mensagem = input("Digite a mensagem para enviar ao servidor: ")
-tamanho_pacote = 3
-janela_tamanho = 4
-timeout = 3
+mensagem = input("Digite a mensagem para enviar: ")
 
 pacotes = []
-acks_recebidos = set()
-
-for i in range(0, len(mensagem), tamanho_pacote):
-    dados = mensagem[i:i+tamanho_pacote]
-    seq = i // tamanho_pacote
+for i in range(0, len(mensagem), tamanho):
+    dados = mensagem[i:i+tamanho]
     checksum = calcular_checksum(dados)
-    pacote = f"{seq}|{dados}|{checksum}"
-    pacotes.append(pacote)
+    pacotes.append(f"{i//tamanho}|{dados}|{checksum}")
 
+janela_tamanho = 4
 base = 0
 next_seq = 0
+timeout = 3
+acks_recebidos = set()
 lock = threading.Lock()
+timer = None
 
-gbn_timer = None
+perder_pacote = input("Deseja simular perda de pacote? (s/n): ").strip().lower() == 's'
+if perder_pacote:
+    pacote_perdido = int(input("Digite o número do pacote que será perdido: "))
+else:
+    pacote_perdido = None
 
-sr_timers = {}
+def iniciar_timer():
+    global timer
+    if timer:
+        timer.cancel()
+    timer = threading.Timer(timeout, tratar_timeout)
+    timer.start()
 
-def iniciar_gbn_timer():
-    global gbn_timer
-    if gbn_timer is not None:
-        gbn_timer.cancel()
-    gbn_timer = threading.Timer(timeout, gbn_timeout_handler)
-    gbn_timer.start()
-
-def gbn_timeout_handler():
-    global base, next_seq
+def tratar_timeout():
     with lock:
-        print("[TIMEOUT GBN] Reenviando todos os pacotes da janela a partir do base")
+        print("[TIMEOUT] Reenviando pacotes da janela")
         for i in range(base, next_seq):
             print(f"[REENVIANDO]: {pacotes[i]}")
             cliente.send(pacotes[i].encode())
-        iniciar_gbn_timer()
-
-def iniciar_sr_timer(seq):
-    t = threading.Timer(timeout, sr_timeout_handler, args=(seq,))
-    sr_timers[seq] = t
-    t.start()
-
-def sr_timeout_handler(seq):
-    with lock:
-        if seq not in acks_recebidos:
-            print(f"[TIMEOUT SR] Reenviando pacote {seq}")
-            cliente.send(pacotes[seq].encode())
-            iniciar_sr_timer(seq)  
+        iniciar_timer()
 
 def receber_ack():
     global base
     while True:
         try:
             resposta = cliente.recv(1024).decode()
-            print(f"[RESPOSTA RECEBIDA]: {resposta}")
+            print(f"[ACK RECEBIDO]: {resposta}")
             if resposta.startswith("ACK"):
                 seq_ack = int(resposta.split()[1])
                 with lock:
-                    acks_recebidos.add(seq_ack)
-                    if modo_operacao == "GBN":
-                        if seq_ack >= base:
-                            base = seq_ack + 1
-                            if base == next_seq:
-                                if gbn_timer is not None:
-                                    gbn_timer.cancel()
-                            else:
-                                iniciar_gbn_timer()
-                    else: 
-                        while base in acks_recebidos:
-                            if base in sr_timers:
-                                sr_timers[base].cancel()
-                                del sr_timers[base]
-                            base += 1
+                    if seq_ack >= base:
+                        base = seq_ack + 1
+                        if base == next_seq:
+                            if timer:
+                                timer.cancel()
+                        else:
+                            iniciar_timer()
         except:
             break
 
@@ -101,23 +83,21 @@ threading.Thread(target=receber_ack, daemon=True).start()
 while base < len(pacotes):
     with lock:
         while next_seq < base + janela_tamanho and next_seq < len(pacotes):
+            if perder_pacote and next_seq == pacote_perdido:
+                print(f"[SIMULADO PERDA]: Pacote {next_seq}")
+                next_seq += 1
+                continue
             print(f"[PACOTE ENVIADO]: {pacotes[next_seq]}")
             cliente.send(pacotes[next_seq].encode())
-            if modo_operacao == "GBN":
-                if base == next_seq:  
-                    iniciar_gbn_timer()
-            else:  
-                iniciar_sr_timer(next_seq)
+            if base == next_seq:
+                iniciar_timer()
             next_seq += 1
-    time.sleep(0.1)  
+    time.sleep(0.1)
 
-if modo_operacao == "GBN" and gbn_timer is not None:
-    gbn_timer.cancel()
-if modo_operacao == "SR":
-    for t in sr_timers.values():
-        t.cancel()
+if timer:
+    timer.cancel()
 
 cliente.send("FIM".encode())
-print("[SINAL DE FIM ENVIADO]")
+print("[FIM ENVIADO]")
 
 cliente.close()
