@@ -1,103 +1,135 @@
 import socket
-import threading
-import time
-import random
-
-def calcular_checksum(dados):
-    return str(sum(ord(c) for c in dados) % 256)
+import math
+import time 
 
 HOST = "localhost"
-PORT = 12345
+PORT = 1234
+TIMEOUT = 1
 
+modes = ["em_rajada", "individual"]
 cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 cliente.connect((HOST, PORT))
+cliente.settimeout(TIMEOUT)
 
-modo = "lote"
-tamanho = 3
-handshake = f"modo:{modo};tamanho:{tamanho}"
-cliente.send(handshake.encode())
-print(f"[HANDSHAKE ENVIADO]: {handshake}")
+def calcular_checksum(payload):
+    return sum(ord(c) for c in payload)
 
-modo_operacao = input("Escolha o modo (gbn ou sr): ").strip()
-cliente.send(modo_operacao.encode())
-print(f"[MODO OPERACAO ENVIADO]: {modo_operacao}")
+tipo = None
+while True:
+    try:
+        mode_code = int(input(
+            "Digite [1] para Go-Back-N\n"
+            "Digite [2] para Selective Repeat\n"
+            "Sua escolha: "
+        ))
+        if mode_code not in [1, 2]:
+            print("\nDigite apenas 1 ou 2\n")
+        else:
+            tipo = modes[mode_code - 1]
+            break
+    except ValueError:
+        print("\nEntrada inválida\n")
 
-mensagem = input("Digite a mensagem para enviar: ")
+max_length = 0
+while True:
+    try:
+        max_length = int(input("Tamanho máximo (1 a 3): "))
+        if not 1 <= max_length <= 3:
+            print("\nValor precisa estar entre 1 e 3\n")
+        else:
+            break
+    except ValueError:
+        print("\nEntrada inválida\n")
 
-pacotes = []
-for i in range(0, len(mensagem), tamanho):
-    dados = mensagem[i:i+tamanho]
-    checksum = calcular_checksum(dados)
-    pacotes.append(f"{i//tamanho}|{dados}|{checksum}")
+window_size = 4  
 
-janela_tamanho = 4
+data = f"{tipo};{max_length};{window_size}\n"
+cliente.send(data.encode())
+print(f"[C] Handshake enviado: modo={tipo}, tam={max_length}, win={window_size}")
+confirmation = cliente.recv(1024).decode().strip()
+print(f"[C] Confirmação recebida: {confirmation}\n")
+
+texto = input("Mensagem: ")
+num_packets = math.ceil(len(texto) / max_length)
+
 base = 0
 next_seq = 0
-timeout = 3
-acks_recebidos = set()
-lock = threading.Lock()
-timer = None
+acked = [False] * num_packets  
+acksRecebidos = []
+finished = False
 
-perder_pacote = input("Deseja simular perda de pacote? (s/n): ").strip().lower() == 's'
-if perder_pacote:
-    pacote_perdido = int(input("Digite o número do pacote que será perdido: "))
-else:
-    pacote_perdido = None
+while not finished and len(acksRecebidos) < num_packets:
+    
+    while next_seq < num_packets and next_seq < base + window_size:
+        start = next_seq * max_length
+        payload = texto[start:start + max_length]
+        checksum = calcular_checksum(payload)
+        if next_seq + 1 == num_packets and tipo == "em_rajada":
+            packet = f"seq={next_seq}|data={payload}|sum={checksum}&\n"
+        else:
+            packet = f"seq={next_seq}|data={payload}|sum={checksum}\n"
 
-def iniciar_timer():
-    global timer
-    if timer:
-        timer.cancel()
-    timer = threading.Timer(timeout, tratar_timeout)
-    timer.start()
+        cliente.send(packet.encode())
+        inicio = time.time()
+        print(f"[C] Pacote enviado: {packet.strip()}\n")
+        if base == next_seq:
+            timer_start = time.time()
+        next_seq += 1
 
-def tratar_timeout():
-    with lock:
-        print("[TIMEOUT] Reenviando pacotes da janela")
-        for i in range(base, next_seq):
-            print(f"[REENVIANDO]: {pacotes[i]}")
-            cliente.send(pacotes[i].encode())
-        iniciar_timer()
+    try:
+        data = cliente.recv(1024).decode()
+        for ack_msg in data.splitlines():
+            fim = time.time()
+            tempo_execucao = fim - inicio
 
-def receber_ack():
-    global base
-    while True:
-        try:
-            resposta = cliente.recv(1024).decode()
-            print(f"[ACK RECEBIDO]: {resposta}")
-            if resposta.startswith("ACK"):
-                seq_ack = int(resposta.split()[1])
-                with lock:
-                    if seq_ack >= base:
-                        base = seq_ack + 1
-                        if base == next_seq:
-                            if timer:
-                                timer.cancel()
-                        else:
-                            iniciar_timer()
-        except:
+            if ack_msg.startswith("ACK"):
+                window_size += 1
+                print(f"[C] Recebido ACK: {ack_msg}")
+                print(f"[C] RTT: {tempo_execucao:.3f}s\n")
+
+                ack_seq = int(ack_msg.split("|")[1])
+
+                if tipo == "em_rajada":
+                    ack_seq = int(ack_msg.split("|")[1])
+                    base = ack_seq + 1
+                    if base == num_packets:
+                        finished = True
+                else:
+                    if not acked[ack_seq]:
+                        acked[ack_seq] = True
+                        acksRecebidos.append(ack_seq)
+                    while base < num_packets and acked[base]:
+                        base += 1
+
+            else:
+                print(f"[C] Recebido NACK: {ack_msg}")
+                print("[C] Servidor congestionado")
+                finished = True
+
+    except socket.timeout:
+        if finished:
             break
-
-threading.Thread(target=receber_ack, daemon=True).start()
-
-while base < len(pacotes):
-    with lock:
-        while next_seq < base + janela_tamanho and next_seq < len(pacotes):
-            if perder_pacote and next_seq == pacote_perdido:
-                print(f"[SIMULADO PERDA]: Pacote {next_seq}")
-                next_seq += 1
-                continue
-            print(f"[PACOTE ENVIADO]: {pacotes[next_seq]}")
-            cliente.send(pacotes[next_seq].encode())
-            if base == next_seq:
-                iniciar_timer()
-            next_seq += 1
-    time.sleep(0.1)
-
-if timer:
-    timer.cancel()
-
-cliente.send("FIM".encode())
-print("[FIM ENVIADO]")
+        print(f"[C] Timeout! Reenviando janela a partir de {base}")
+        if tipo == "em_rajada":
+            for seq in range(base, min(base + window_size, num_packets)):
+                start = seq * max_length
+                payload = texto[start:start + max_length]
+                checksum = calcular_checksum(payload)
+                packet = f"seq={seq}|data={payload}|sum={checksum}\n"
+                cliente.send(packet.encode())
+                print(f"[C] Reenviado: {packet.strip()}")
+        else:
+            for seq in range(base, min(base + window_size, num_packets)):
+                if acked[seq]:
+                    continue
+                start = seq * max_length
+                payload = texto[start:start + max_length]
+                checksum = calcular_checksum(payload)
+                packet = f"seq={seq}|data={payload}|sum={checksum}\n"
+                cliente.send(packet.encode())
+                print(f"[C] Reenviado: {packet.strip()}")
+        print()
+        inicio = time.time()
 
 cliente.close()
+print("[C] Conexão encerrada.")
