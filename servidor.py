@@ -22,8 +22,6 @@ print(f"[MODO OPERACAO RECEBIDO]: {modo_operacao}")
 mensagem_completa = {}
 esperado = 0
 
-esperado = 0  
-
 def processar_pacote(pacote):
     global esperado
     try:
@@ -33,19 +31,25 @@ def processar_pacote(pacote):
         seq = int(seq)
         checksum_calculado = calcular_checksum(dados)
 
+        print(f"[PACOTE RECEBIDO]: Seq={seq} Dados={dados} Checksum={checksum_calculado}")
+
         if checksum_calculado == checksum:
             if modo_operacao == "GBN":
                 if seq == esperado:
                     mensagem_completa[seq] = dados
                     esperado += 1
-                    ack = f"ACK {seq}"       
-                else:
-                    ack = f"ACK {esperado-1}" 
+                ack = f"ACK {esperado-1}"
                 conexao.send(ack.encode())
-            else:  # SR
+                print(f"[ACK ENVIADO]: {ack}")
+            else:  
                 mensagem_completa[seq] = dados
                 ack = f"ACK {seq}"
                 conexao.send(ack.encode())
+                print(f"[ACK ENVIADO]: {ack}")
+        else:
+            nack = f"NACK {seq}"
+            conexao.send(nack.encode())
+            print(f"[NACK ENVIADO]: {nack}")
     except:
         print("[ERRO] Pacote mal formatado")
 

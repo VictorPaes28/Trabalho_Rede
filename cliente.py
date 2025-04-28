@@ -87,7 +87,7 @@ def receber_ack():
                                     gbn_timer.cancel()
                             else:
                                 iniciar_gbn_timer()
-                    else:  # SR
+                    else: 
                         while base in acks_recebidos:
                             if base in sr_timers:
                                 sr_timers[base].cancel()
