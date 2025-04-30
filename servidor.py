@@ -1,35 +1,60 @@
 import socket
+import time
 
 HOST = "localhost"
-PORT = 1234
+PORT = 5065
 
-servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-servidor.bind((HOST, PORT))
-servidor.listen(1)
-print(f"[S] Aguardando conexão na porta {PORT}...")
-conn, addr = servidor.accept()
-print(f"[S] Conectado a {addr}")
+while True:
+    try:
+        mode_code = int(input(
+            "Digite [1] para simular perda de pacote\n"
+            "Digite [2] para continuar normalmente\n"
+            "Digite: "
+        ))
+        if mode_code not in [1, 2]:
+            print("\nDigite apenas [1] ou [2]\n")
+        else:
+            if mode_code == 1:
+                perderPacote = True
+
+                while True:
+                    try:
+                        pacotePerdido = int(input(
+                            "Digite o número do pacote que será perdido: "
+                        ))
+                        break
+                    except ValueError:
+                        print("\nEntrada inválida! Digite um número\n")
+            else:
+                pacotePerdido = None
+                perderPacote = False
+            break
+    except ValueError:
+        print("\nEntrada inválida! Digite um número\n")
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind((HOST, PORT))
+server.listen(1)
+print(f"[SERVIDOR] Aguardando conexão na porta {PORT}...")
+conn, addr = server.accept()
+print(f"[SERVIDOR] Conectado a {addr}")
 
 def calcular_checksum(payload):
     return sum(ord(c) for c in payload)
 
-opc = input("Digite [1] para simular perda ou [2] para normal: ")
-if opc == "1":
-    perderPacote = True
-    pacotePerdido = int(input("Número do pacote que será perdido: "))
-else:
-    perderPacote = False
-    pacotePerdido = -1
-
 buffer = ""
+
 while "\n" not in buffer:
-    buffer += conn.recv(1024).decode()
+    data = conn.recv(1024).decode()
+    if not data:
+        break
+    buffer += data
 
 header, buffer = buffer.split("\n", 1)
 mode, max_len_str, window_str = header.split(";")
 max_length = int(max_len_str)
 window_size = int(window_str)
-print(f"[S] Handshake: modo={mode}, max={max_length}, win={window_size}\n")
+print(f"[SERVIDOR] Handshake: modo={mode}, max_payload={max_length}, janela={window_size}\n")
 conn.send("HANDSHAKE_OK\n".encode())
 
 expected_seq = 0
@@ -43,60 +68,67 @@ while True:
     
     while "\n" in buffer:
         line, buffer = buffer.split("\n", 1)
-        if "&" in line:
-            lastPacket = True
-            line = line.replace("&", "")
-        else:
-            lastPacket = False
+        try:
+            if "&" in line:
+                lastPacket = True
+                line = line.replace("&", "")
+            else:
+                lastPacket = False
 
-        parts = line.strip().split("|")
-        d = {k:v for k,v in (p.split("=",1) for p in parts)}
-        seq = int(d["seq"])
-        payload = d["data"]
-        checksum_recv = int(d["sum"])
+            parts = line.strip().split("|")
+            data_dict = {}
+            for part in parts:
+                key, value = part.split("=", 1)
+                data_dict[key] = value
 
-        if perderPacote and seq == pacotePerdido:
-            print(f"[S] Simulando perda do pacote {seq}")
-            perderPacote = False
+            seq = int(data_dict["seq"])
+            if seq == pacotePerdido and perderPacote:
+                perderPacote = False
+                continue
+            payload = data_dict["data"]
+            checksum_recv = int(data_dict["sum"])
+        except ValueError:
+            print(f"[SERVIDOR] Pacote mal formado: {line}")
             continue
 
-        calc = calcular_checksum(payload)
-        print(f"[S] Pacote recebido seq={seq}|data={payload}|sum={calc}")
-
-        if checksum_recv != calc:
-            print(f"[S] Checksum inválido seq={seq}")
+        if checksum_recv != calcular_checksum(payload):
+            print(f"[SERVIDOR] Checksum inválido seq={seq}")
             continue
 
-        if seq in received:
-            print(f"[S] Pacote repetido seq={seq}")
-            continue
-
-        if mode == "individual":
-            if seq in received:
-                print(f"[S] Pacote repetido seq={seq}")
+        print(f"[SERVIDOR] Pacote recebido {line}")
+        print(f"[SERVIDOR] Checksum válido {line}")
+        if seq in received.keys():
+                print(f"[SERVIDOR] Pacote repetido\n")
                 continue
 
-            received[seq] = payload
-            ack = f"ACK|{seq}\n"
+        if seq < expected_seq or seq >= expected_seq + window_size:
+            ack = f"ACK|{expected_seq}\n" if mode == "em_rajada" else f"ACK|{seq}\n"
             conn.send(ack.encode())
-            print(f"[S] Enviado {ack.strip()}")
-        else:  
+            continue
+
+        received[seq] = payload
+        if mode == "individual":
+            ack = f"ACK|{seq}|[{abs(4-window_size)}-{window_size-1}]\n"
+            window_size += 1
+            conn.send(ack.encode())
+            print(f"[SERVIDOR] Enviado {ack.strip()}\n")
+        else:
             if seq == expected_seq:
-                received[seq] = payload
-                conn.send(f"ACK|{seq}\n".encode())
-                print(f"[S] Enviado ACK|{seq}")
-                expected_seq += 1
+                while expected_seq in received:
+                    expected_seq += 1
+            if lastPacket:
+                ack = f"ACK|{expected_seq}|[{abs(4-window_size)}-{window_size-1}]\n"
+                window_size += 1
+                conn.send(ack.encode())
+                print(f"[SERVIDOR] Enviado {ack.strip()}\n")
             else:
-                print(f"[S] Pacote fora de ordem seq={seq} - ignorado")
-                conn.send(f"ACK|{expected_seq-1}\n".encode())
-                print(f"[S] Enviado ACK|{expected_seq-1} (fora de ordem)")
+                if window_size <= len(received):
+                    ack = f"NACK|{expected_seq}|[{abs(4-window_size)}-{window_size-1}]\n"
+                    conn.send(ack.encode())
+                    print(f"[SERVIDOR] Enviado {ack.strip()}\n")
 
-        if lastPacket:
-            break
-
-msg = ''.join(received[i] for i in sorted(received))
-print(f"[S] Mensagem final: '{msg}'")
-
+txt = ''.join(received[i] for i in sorted(received))
+print(f"[SERVIDOR] Mensagem completa: '{txt}'")
 conn.close()
-servidor.close()
-print("[S] Conexão encerrada.")
+server.close()
+print("\n[SERVIDOR] Conexão encerrada.")
