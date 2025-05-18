@@ -1,11 +1,10 @@
 import socket
 import math
 import time
-import re  
 
 HOST = "localhost"
 PORT = 5065
-TIMEOUT = 1
+TIMEOUT = 2
 
 modes = ["em_rajada", "individual"]
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -34,15 +33,15 @@ while True:
 max_length = 0
 while True:
     try:
-        max_length = int(input("Digite o tamanho máximo da mensagem (Max 3): "))
-        if not 1 <= max_length <= 3:
-            print("\nO tamanho maximo precisa estar entre 1 e 3\n")
+        max_length = int(input("Digite o tamanho máximo da mensagem (ex: 5-10): "))
+        if not 1 <= max_length <= 50:
+            print("\nTamanho fora do intervalo (1-50)\n")
         else:
             break
     except ValueError:
         print("\nEntrada inválida. Digite um número\n")
 
-window_size = 4  
+window_size = 4
 
 data = f"{tipo};{max_length};{window_size}\n"
 client.send(data.encode())
@@ -55,28 +54,29 @@ num_packets = math.ceil(len(texto) / max_length)
 
 base = 0
 next_seq = 0
-acked = [False] * num_packets  
-
+acked = [False] * num_packets
 timer_start = None
-
 acksRecebidos = []
-
 finished = False
 
 while not finished and len(acksRecebidos) < num_packets:
-    
     while next_seq < num_packets and next_seq < base + window_size:
         start = next_seq * max_length
         payload = texto[start:start + max_length]
         checksum = calcular_checksum(payload)
+
+        # Simula erro no pacote 2
+        if next_seq == 2:
+            checksum += 1
+
         if next_seq + 1 == num_packets and tipo == "em_rajada":
             packet = f"seq={next_seq}|data={payload}|sum={checksum}&\n"
         else:
             packet = f"seq={next_seq}|data={payload}|sum={checksum}\n"
 
         client.send(packet.encode())
-        inicio = time.time()
         print(f"[CLIENTE] Pacote enviado: {packet.strip()}\n")
+
         if base == next_seq:
             timer_start = time.time()
         next_seq += 1
@@ -84,14 +84,9 @@ while not finished and len(acksRecebidos) < num_packets:
     try:
         data = client.recv(1024).decode()
         for ack_msg in data.splitlines():
-            fim = time.time()
-            tempo_execucao = fim - inicio
-
             if ack_msg.startswith("ACK"):
-                window_size += 1
+                ack_value = int(ack_msg.split("|")[1])
                 print(f"[CLIENTE] ACK recebido: {ack_msg}")
-                ack_value = int(ack_msg.split("|")[1])  
-                print(f"[CLIENTE] Tempo de Resposta: {tempo_execucao:.4f}s ⏰\n")
 
                 if tipo == "em_rajada" and ack_value == num_packets:
                     finished = True
@@ -99,49 +94,32 @@ while not finished and len(acksRecebidos) < num_packets:
 
                 if tipo == "em_rajada":
                     if ack_value not in acksRecebidos:
-                        if not acksRecebidos or max(acksRecebidos) < ack_value:
-                            acksRecebidos.append(ack_value)
-                        else:
-                            acksRecebidos.append(ack_value)
+                        acksRecebidos.append(ack_value)
                 else:
-                    acksRecebidos.append(ack_value)
-
-                acks = re.findall(r'ACK\|(\d+)', ack_msg)
-                if not acks:
-                    print(f"[CLIENTE] Formato de ACK inválido: {ack_msg}")
-                    continue
-                ack_seq = int(acks[-1])
+                    if not acked[ack_value]:
+                        acked[ack_value] = True
+                        acksRecebidos.append(ack_value)
 
                 if tipo == "individual":
-                    acked[ack_seq] = True
                     while base < num_packets and acked[base]:
                         base += 1
                 else:
-                    base = ack_seq
+                    base = ack_value
 
-                if base != next_seq:
+                if base == next_seq:
+                    timer_start = None
+                else:
                     timer_start = time.time()
-            else:
+
+            elif ack_msg.startswith("NACK"):
                 print(f"[CLIENTE] NACK recebido: {ack_msg}")
-                print(f"[CLIENTE] Servidor congestionado")
-                finished = True
+                nack_seq = int(ack_msg.split("|")[1])
+                next_seq = nack_seq
+                break
 
     except socket.timeout:
-        if finished:
-            break
         print(f"[CLIENTE] Timeout. Reenviando janela base={base}")
-        for seq in range(base, min(base + window_size, num_packets)):
-            if tipo == "individual" and acked[seq]:
-                continue
-            start = seq * max_length
-            payload = texto[start:start + max_length]
-            checksum = calcular_checksum(payload)
-            packet = f"seq={seq}|data={payload}|sum={checksum}\n"
-            client.send(packet.encode())
-            print(f"[CLIENTE] Reenviado: {packet.strip()}")
-        print("\n")
-        inicio = time.time()
-        timer_start = time.time()
+        next_seq = base
 
 client.close()
 print("[CLIENTE] Conexão encerrada.")
