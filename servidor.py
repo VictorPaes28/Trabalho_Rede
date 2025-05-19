@@ -6,7 +6,13 @@ PORT = 5065
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind((HOST, PORT))
 server.listen(1)
-print("Esperando conexão...")
+
+try:
+    perder_pacote = int(input(" So execute o cliente após digitar o número do pacote a ser perdido (-1 para nenhum): "))
+except ValueError:
+    perder_pacote = -1
+
+print("[SERVIDOR] Aguardando conexão... (So execute o cliente após esta mensagem)")
 conn, _ = server.accept()
 
 def checksum(payload):
@@ -20,32 +26,53 @@ modo, max_len, window = buffer.strip().split(";")
 max_len = int(max_len)
 window_size = int(window)
 
-conn.send("HANDSHAKE_OK\n".encode())
+try:
+    conn.send("HANDSHAKE_OK\n".encode())
+except (ConnectionResetError, BrokenPipeError):
+    print("[SERVIDOR] Erro ao enviar HANDSHAKE_OK: cliente desconectou.")
+    conn.close()
+    server.close()
+    exit()
+
+print(f"[SERVIDOR] Handshake: modo={modo}, max_payload={max_len}, janela={window_size}\n")
+
 expected_seq = 0
 received = {}
 
-perder_pacote = 3
-
 while True:
-    data = conn.recv(1024).decode()
-    if not data:
+    try:
+        data = conn.recv(1024).decode()
+        if not data:
+            break
+    except (ConnectionResetError, BrokenPipeError):
+        print("[SERVIDOR] Cliente desconectou de forma inesperada.")
         break
 
     lines = data.strip().split("\n")
     for line in lines:
-        parts = {p.split('=')[0]: p.split('=')[1] for p in line.split('|')}
-        seq = int(parts["seq"])
-        payload = parts["data"]
-        sum_recv = int(parts["sum"].replace('&', ''))
+        try:
+            parts = {p.split('=')[0]: p.split('=')[1] for p in line.split('|')}
+            seq = int(parts["seq"])
+            payload = parts["data"]
+            sum_recv = int(parts["sum"].replace('&', ''))
+        except Exception:
+            print(f"[SERVIDOR] Pacote mal formado ou erro de parsing: {line}")
+            continue
 
         if seq == perder_pacote:
-            print(f"Pacote {seq} perdido (simulação)")
+            print(f"[SERVIDOR] Simulação: pacote {seq} perdido\n")
             perder_pacote = -1
             continue
 
         if checksum(payload) != sum_recv:
-            print(f"Checksum errado seq={seq}")
-            conn.send(f"NACK|{seq}\n".encode())
+            print(f"[SERVIDOR] Checksum inválido para seq={seq}. Esperado: {checksum(payload)}, Recebido: {sum_recv}")
+            try:
+                conn.send(f"NACK|{seq}\n".encode())
+            except (ConnectionResetError, BrokenPipeError):
+                print("[SERVIDOR] Falha ao enviar NACK: cliente desconectou.")
+                conn.close()
+                server.close()
+                exit()
             continue
 
         if modo == "em_rajada":
@@ -54,19 +81,39 @@ while True:
                 expected_seq += 1
                 while expected_seq in received:
                     expected_seq += 1
-                conn.send(f"ACK|{expected_seq}\n".encode())
-                print(f"Pacote {seq} recebido e processado.")
+                print(f"[SERVIDOR] Pacote {seq} OK (em ordem). ACK cumulativo enviado: {expected_seq}")
+                try:
+                    conn.send(f"ACK|{expected_seq}\n".encode())
+                except (ConnectionResetError, BrokenPipeError):
+                    print("[SERVIDOR] Falha ao enviar ACK: cliente desconectou.")
+                    conn.close()
+                    server.close()
+                    exit()
             else:
-                print(f"Pacote fora de ordem (GBN): seq={seq}, esperado={expected_seq}")
-                conn.send(f"ACK|{expected_seq}\n".encode())
+                print(f"[SERVIDOR] Pacote fora de ordem (GBN): seq={seq}, esperado={expected_seq}. Reenviando ACK|{expected_seq}")
+                try:
+                    conn.send(f"ACK|{expected_seq}\n".encode())
+                except (ConnectionResetError, BrokenPipeError):
+                    print("[SERVIDOR] Falha ao reenviar ACK: cliente desconectou.")
+                    conn.close()
+                    server.close()
+                    exit()
         else:
             if seq not in received:
+                print(f"[SERVIDOR] Pacote {seq} armazenado (SR). ACK individual enviado: {seq}")
                 received[seq] = payload
-            conn.send(f"ACK|{seq}\n".encode())
-            print(f"Pacote {seq} recebido e processado.")
+            else:
+                print(f"[SERVIDOR] Pacote {seq} duplicado (SR). ACK individual reenviado.")
+            try:
+                conn.send(f"ACK|{seq}\n".encode())
+            except (ConnectionResetError, BrokenPipeError):
+                print("[SERVIDOR] Falha ao enviar ACK (SR): cliente desconectou.")
+                conn.close()
+                server.close()
+                exit()
 
 mensagem_final = ''.join(received[i] for i in sorted(received))
-print(f"Mensagem recebida: {mensagem_final}")
+print(f"\n[SERVIDOR] Mensagem recebida: {mensagem_final}")
 
 conn.close()
 server.close()
