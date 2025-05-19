@@ -13,18 +13,35 @@ except ValueError:
     perder_pacote = -1
 
 print("[SERVIDOR] Aguardando conexão... (So execute o cliente após esta mensagem)")
-conn, _ = server.accept()
+try:
+    conn, _ = server.accept()
+except Exception as e:
+    print(f"[SERVIDOR] Erro ao aceitar conexão: {e}")
+    server.close()
+    exit(1)
 
 def checksum(payload):
     return sum(ord(c) for c in payload)
 
 buffer = ""
 while "\n" not in buffer:
-    buffer += conn.recv(1024).decode()
+    try:
+        buffer += conn.recv(1024).decode()
+    except (ConnectionResetError, BrokenPipeError):
+        print("[SERVIDOR] Erro ao receber handshake: cliente desconectou.")
+        conn.close()
+        server.close()
+        exit(1)
 
-modo, max_len, window = buffer.strip().split(";")
-max_len = int(max_len)
-window_size = int(window)
+try:
+    modo, max_len, window = buffer.strip().split(";")
+    max_len = int(max_len)
+    window_size = int(window)
+except Exception as e:
+    print(f"[SERVIDOR] Erro ao processar handshake: {e}")
+    conn.close()
+    server.close()
+    exit(1)
 
 try:
     conn.send("HANDSHAKE_OK\n".encode())
@@ -32,7 +49,7 @@ except (ConnectionResetError, BrokenPipeError):
     print("[SERVIDOR] Erro ao enviar HANDSHAKE_OK: cliente desconectou.")
     conn.close()
     server.close()
-    exit()
+    exit(1)
 
 print(f"[SERVIDOR] Handshake: modo={modo}, max_payload={max_len}, janela={window_size}\n")
 
@@ -72,7 +89,7 @@ while True:
                 print("[SERVIDOR] Falha ao enviar NACK: cliente desconectou.")
                 conn.close()
                 server.close()
-                exit()
+                exit(1)
             continue
 
         if modo == "em_rajada":
@@ -88,7 +105,7 @@ while True:
                     print("[SERVIDOR] Falha ao enviar ACK: cliente desconectou.")
                     conn.close()
                     server.close()
-                    exit()
+                    exit(1)
             else:
                 print(f"[SERVIDOR] Pacote fora de ordem (GBN): seq={seq}, esperado={expected_seq}. Reenviando ACK|{expected_seq}")
                 try:
@@ -97,7 +114,7 @@ while True:
                     print("[SERVIDOR] Falha ao reenviar ACK: cliente desconectou.")
                     conn.close()
                     server.close()
-                    exit()
+                    exit(1)
         else:
             if seq not in received:
                 print(f"[SERVIDOR] Pacote {seq} armazenado (SR). ACK individual enviado: {seq}")
@@ -110,10 +127,19 @@ while True:
                 print("[SERVIDOR] Falha ao enviar ACK (SR): cliente desconectou.")
                 conn.close()
                 server.close()
-                exit()
+                exit(1)
 
-mensagem_final = ''.join(received[i] for i in sorted(received))
-print(f"\n[SERVIDOR] Mensagem recebida: {mensagem_final}")
+# Reconstrução robusta da mensagem final
+try:
+    mensagem_final = ''.join(received[i] for i in sorted(received))
+    print(f"\n[SERVIDOR] Mensagem recebida: {mensagem_final}")
+except Exception as e:
+    print(f"[SERVIDOR] Erro ao reconstruir mensagem final: {e}")
+    print(f"[SERVIDOR] Pacotes recebidos: {received}")
 
-conn.close()
-server.close()
+try:
+    conn.close()
+    server.close()
+    print("[SERVIDOR] Conexão encerrada.")
+except Exception:
+    print("[SERVIDOR] Erro ao fechar conexão.")
